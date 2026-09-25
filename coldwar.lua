@@ -775,148 +775,97 @@ end
 au.volleyFrom = aC
 au.fireVolleyFn = aC(aD)
 
--- ▼▼▼ TURRET NO-SLOWDOWN SYSTEM (added) ▼▼▼
--- ═══════════════════════════════════════════════════════════════
--- Scans TurretFireController for functions that apply a slow turn/
--- aim/slew rate and multiplies those small numeric upvalues.
--- Also scans live turret instance tables captured from fireOnce.
--- ═══════════════════════════════════════════════════════════════
-local turretCache = {
-	funcs     = {},
-	instances = setmetatable({}, { __mode = "k" }),
-	scanned   = false,
-}
+-- ▼▼▼ TURRET AIM FIX (working) ▼▼▼
+-- Finds TurretController.Attach's u5 state upvalue and sets
+-- config.YawSpeed / config.PitchSpeed to huge values each frame.
+local turretCtrlModule
+local turretStateIndex
+local turretDebugOK = false
+local savedSensADS
 
-local function collectTurretFunctions(tbl, depth, seen)
-	depth = depth or 0
-	seen = seen or {}
-	if depth > 4 or type(tbl) ~= "table" or seen[tbl] then
+pcall(function()
+	turretCtrlModule = require(m.Shared.Vehicle.TurretController)
+end)
+
+if turretCtrlModule and type(turretCtrlModule.Attach) == "function" then
+	local ok, upvs = pcall(debug.getupvalues, turretCtrlModule.Attach)
+	if ok then
+		for idx, v in upvs do
+			if type(v) == "table" and (v.active ~= nil or v.yawMotor ~= nil) then
+				turretStateIndex = idx
+				turretDebugOK = true
+				break
+			end
+		end
+	end
+end
+
+local function turretGetState()
+	if not (turretCtrlModule and turretStateIndex) then
+		return nil
+	end
+	local ok, u5 = pcall(debug.getupvalue, turretCtrlModule.Attach, turretStateIndex)
+	if ok and type(u5) == "table" then
+		return u5
+	end
+	return nil
+end
+
+local function turretDumpDebug()
+	print("[TurretFix] === TurretController debug ===")
+	print("[TurretFix] module:", tostring(turretCtrlModule))
+	print("[TurretFix] u5 index:", tostring(turretStateIndex))
+	if turretCtrlModule and type(turretCtrlModule.Attach) == "function" then
+		for i, v in debug.getupvalues(turretCtrlModule.Attach) do
+			print(("[TurretFix]   upvalue[%d] type=%s value=%s"):format(
+				i, type(v), tostring(v)))
+		end
+	end
+	local u5 = turretGetState()
+	if u5 then
+		print("[TurretFix] active:", tostring(u5.active))
+		if u5.config then
+			for k, v in pairs(u5.config) do
+				print(("[TurretFix]   config.%s = %s"):format(tostring(k), tostring(v)))
+			end
+		end
+	end
+end
+
+local function turretApplyFix()
+	if not turretCtrlModule or not turretStateIndex then
 		return
 	end
-	seen[tbl] = true
-	for k, v in pairs(tbl) do
-		if type(v) == "function" and ar(v) then
-			turretCache.funcs[#turretCache.funcs + 1] = { key = k, fn = v }
-		elseif type(v) == "table" then
-			collectTurretFunctions(v, depth + 1, seen)
-		end
+	local u5 = turretGetState()
+	if not (u5 and u5.active and u5.config) then
+		return
+	end
+	u5.config.YawSpeed = 1e6
+	u5.config.PitchSpeed = 1e6
+	u5.config.YawLimits = nil
+	u5.config.PitchLimits = nil
+end
+
+local function turretApplySensitivity()
+	local sensADS = l:FindFirstChild("SensitivityADS")
+	if not sensADS then
+		return
+	end
+	if not savedSensADS then
+		savedSensADS = sensADS.Value
+	end
+	local mult = e.turretsensitivity or 1
+	local target = savedSensADS * mult
+	if sensADS.Value ~= target then
+		sensADS.Value = target
 	end
 end
 
-local function dumpTurret()
-	collectTurretFunctions(ak)
-	print("[NoTurretSlowdown] === TurretFireController dump ===")
-	print(("[NoTurretSlowdown] %d functions found"):format(#turretCache.funcs))
-	for i, entry in ipairs(turretCache.funcs) do
-		local upv, const, info = {}, {}, {}
-		pcall(function() upv  = debug.getupvalues(entry.fn)  end)
-		pcall(function() const = debug.getconstants(entry.fn) end)
-		pcall(function() info = debug.getinfo(entry.fn)      end)
-
-		local bits = {}
-		for j, v in pairs(upv) do
-			if type(v) == "number" then
-				bits[#bits + 1] = ("upv[%d]=%s"):format(j, tostring(v))
-			elseif type(v) == "table" then
-				for k2, v2 in pairs(v) do
-					if type(v2) == "number" then
-						bits[#bits + 1] = ("upv[%d].%s=%s"):format(j, tostring(k2), tostring(v2))
-					end
-				end
-			end
-		end
-		for j, v in pairs(const) do
-			if type(v) == "string" then
-				local lo = v:lower()
-				if lo:find("speed") or lo:find("turn") or lo:find("slow")
-					or lo:find("rate") or lo:find("aim") or lo:find("rot")
-					or lo:find("slew")  or lo:find("limit")
-				then
-					bits[#bits + 1] = ("const[%d]=%q"):format(j, v)
-				end
-			end
-		end
-
-		print(("[NoTurretSlowdown] [%d] key=%s nups=%s nparams=%s -> %s"):format(
-			i,
-			tostring(entry.key),
-			tostring(info.nups or "?"),
-			tostring(info.numparams or "?"),
-			table.concat(bits, ", ")
-		))
-	end
-
-	local tool = l.Character and l.Character:FindFirstChildOfClass("Tool")
-	local turretObj = tool and turretCache.instances[tool]
-	if turretObj then
-		print("[NoTurretSlowdown] === Turret instance fields ===")
-		for k, v in pairs(turretObj) do
-			if type(v) == "number" or type(v) == "string" or type(v) == "boolean" then
-				print(("[NoTurretSlowdown]   .%s = %s"):format(tostring(k), tostring(v)))
-			end
-		end
-	end
-end
-
-local function rememberTurret(turret)
-	if turret and turret.tool then
-		turretCache.instances[turret.tool] = turret
-	end
-end
-
-local function applyTurretNoSlowdown()
-	collectTurretFunctions(ak)
-
-	-- 1) Boost small numeric upvalues on functions that clearly deal
-	--    with aiming/turning/rotating/slewing.
-	for _, entry in ipairs(turretCache.funcs) do
-		local const = {}
-		pcall(function() const = debug.getconstants(entry.fn) end)
-
-		local relevant = false
-		for _, v in pairs(const) do
-			if type(v) == "string" then
-				local lo = v:lower()
-				if lo:find("aim") or lo:find("turn") or lo:find("rot")
-					or lo:find("slew") or lo:find("rate") or lo:find("speed")
-				then
-					relevant = true
-					break
-				end
-			end
-		end
-		if not relevant then continue end
-
-		pcall(function()
-			for j, v in debug.getupvalues(entry.fn) do
-				if type(v) == "number" and v > 0 and v < 5 then
-					debug.setupvalue(entry.fn, j, v * 1000)
-				end
-			end
-		end)
-	end
-
-	-- 2) Boost rate fields on any captured live turret instance table.
-	for _, inst in pairs(turretCache.instances) do
-		if type(inst) == "table" then
-			for k, v in pairs(inst) do
-				if type(v) == "number" and v > 0 and v < 5 then
-					local name = tostring(k):lower()
-					if name:find("turn") or name:find("slew") or name:find("aim")
-						or name:find("rate") or name:find("speed") or name:find("rot")
-					then
-						inst[k] = v * 1000
-					end
-				end
-			end
-		end
-	end
-end
-
-au.dumpTurret      = dumpTurret
-au.rememberTurret  = rememberTurret
-au.applyTurretMods = applyTurretNoSlowdown
--- ▲▲▲ END TURRET SYSTEM ▲▲▲
+au.turretDumpDebug          = turretDumpDebug
+au.turretApplyFix           = turretApplyFix
+au.turretApplySensitivity   = turretApplySensitivity
+au.turretDebugOK            = function() return turretDebugOK end
+-- ▲▲▲ END TURRET AIM FIX ▲▲▲
 
 return au
 end)()
@@ -1087,19 +1036,23 @@ if ad.getRecoilMult.func then
 	pcall(hookfunction, ad.getRecoilMult.func, ao)
 end
 
+-- ▼▼▼ SEND-OWN-INFO HOOK (spin + pitch) ▼▼▼
 if ad.sendOwnInfo.func then
 	local ap = C(ad.sendOwnInfo.func)
 	hookfunction(ad.sendOwnInfo.func, function(...)
 		LPH_ATTRIBUTES(VM(NONE))
-		if e.antiaimpitch then
-			local aq = debug.getupvalue(ap, 1)
-			if aq then
+		local aq = debug.getupvalue(ap, 1)
+		if aq then
+			if e.antiaimspin and e.spinAngle then
+				aq.NewCameraAngle = e.spinAngle
+			elseif e.antiaimpitch then
 				aq.NewCameraAngle = math.rad(g("antiaimpitchangle", 90))
 			end
 		end
 		return ap(...)
 	end)
 end
+-- ▲▲▲ END SEND-OWN-INFO HOOK ▲▲▲
 
 if ad.bodyWallPush.func then
 	local ap = C(ad.bodyWallPush.func)
@@ -1128,11 +1081,12 @@ if ad.viewmodelWallPush.func then
 	end)
 end
 
+-- ▼▼▼ BODY-ROTATION HOOK (spin replication) ▼▼▼
 if ad.bodyRotationUpdate.func then
 	local ap = C(ad.bodyRotationUpdate.func)
 	hookfunction(ad.bodyRotationUpdate.func, function(aq, ar)
 		LPH_ATTRIBUTES(VM(NONE))
-		if not e.antiaimpitch and not e.gunup then
+		if not e.antiaimpitch and not e.gunup and not e.antiaimspin then
 			return ap(aq, ar)
 		end
 		if aq ~= l.Character or not ar then
@@ -1155,9 +1109,19 @@ if ad.bodyRotationUpdate.func then
 		if at ~= nil and as.Parent then
 			as.Value = at
 		end
+
+		-- Force HRP yaw so other players see the spin
+		if e.antiaimspin and e.spinAngle then
+			local hrp = aq:FindFirstChild("HumanoidRootPart")
+			if hrp then
+				hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, e.spinAngle, 0)
+			end
+		end
+
 		return table.unpack(au, 1, au.n)
 	end)
 end
+-- ▲▲▲ END BODY-ROTATION HOOK ▲▲▲
 
 if ad.fire.func then
 	local ap = C(ad.fire.func)
@@ -1268,15 +1232,6 @@ if ad.fireOnce.func then
 		if not (aq and aq.muzzle and aq.muzzle.Parent) then
 			return
 		end
-
-		-- ▼▼▼ TURRET HOOK (added) ▼▼▼
-		if ad.rememberTurret then
-			ad.rememberTurret(aq)
-		end
-		if e.noturretslowdown and ad.applyTurretMods then
-			pcall(ad.applyTurretMods)
-		end
-		-- ▲▲▲ END TURRET HOOK ▲▲▲
 
 		local aw = ad.volleyFrom(au) or ad.fireVolleyFn
 
@@ -2509,21 +2464,28 @@ if la_is_premium then
     })
 end
 
--- ▼▼▼ TURRET TOGGLE (added, no premium gate) ▼▼▼
+-- ▼▼▼ TURRET GROUPBOX (working) ▼▼▼
 local turretBox = o.Combat:AddRightGroupbox("Turret")
 turretBox:AddToggle("noturretslowdown", { Text = "No Turret Slowdown", Default = false })
+turretBox:AddSlider("turretsensitivity", {
+	Text = "Turret Sensitivity",
+	Default = 1,
+	Min = 0.1,
+	Max = 5,
+	Rounding = 2,
+})
 turretBox:AddButton({
 	Text = "Dump Turret Debug",
 	Func = function()
-		if ad.dumpTurret then
-			pcall(ad.dumpTurret)
-			n:Notify("Turret debug printed to console (F9).")
+		if ad.turretDumpDebug then
+			pcall(ad.turretDumpDebug)
+			n:Notify("Turret debug printed to F9 console.")
 		else
 			n:Notify("Turret module not found.")
 		end
 	end,
 })
--- ▲▲▲ END TURRET TOGGLE ▲▲▲
+-- ▲▲▲ END TURRET GROUPBOX ▲▲▲
 
 local bh = Instance.new("ScreenGui")
 bh.Name = "cwfov"
@@ -2605,9 +2567,6 @@ end
 	d.espCfg = a9
 	d.applyESP = bc
 	d.refreshTeamFilter = bd
-	d.dumpTurret = ad.dumpTurret
-	d.rememberTurret = ad.rememberTurret
-	d.applyTurretMods = ad.applyTurretMods
 	d.cars = {
 		entries = aB,
 		defaults = ax,
@@ -2632,6 +2591,13 @@ end
 		carModsStep = W,
 		applyESP = bc,
 		refreshTeamFilter = bd,
+		turretFixStep = function()
+			if ad.turretApplyFix then pcall(ad.turretApplyFix) end
+			if ad.turretApplySensitivity then pcall(ad.turretApplySensitivity) end
+		end,
+		dumpTurret = function()
+			if ad.turretDumpDebug then pcall(ad.turretDumpDebug) end
+		end,
 		unload = function()
 			if bh then
 				bh:Destroy()
@@ -3531,6 +3497,10 @@ local function aR(aS)
 	if ad.antiaimspin and not aW then
 		aQ = (aQ + math.rad(af("antiaimspinspeed", 180)) * aS) % math.tau
 		aV.CFrame = CFrame.new(aV.Position) * CFrame.Angles(0, aQ, 0)
+		-- Share the spin angle so the combat module can send it to the server
+		ad.spinAngle = aQ
+	else
+		ad.spinAngle = nil
 	end
 end
 if la_is_premium then
@@ -3596,6 +3566,9 @@ if la_is_premium then
     		end
     		aO = nil
     		aP = nil
+    	end
+    	if not aU then
+    		ad.spinAngle = nil
     	end
     end)
     aT:AddSlider(
@@ -3719,21 +3692,6 @@ if la_is_premium then
     Toggles["carmods"]:OnChanged(function(a2)
     	ac.cars.apply()
     end)
-
-    -- ▼▼▼ TURRET SETTINGS (added) ▼▼▼
-    a1:AddToggle("noturretslowdown", { Text = "No Turret Slowdown", Default = false })
-    a1:AddButton({
-    	Text = "Dump Turret Debug",
-    	Func = function()
-    		if ac.dumpTurret then
-    			pcall(ac.dumpTurret)
-    			print("[NoTurretSlowdown] Dump complete - see console above.")
-    		else
-    			print("[NoTurretSlowdown] Turret module not accessible.")
-    		end
-    	end,
-    })
-    -- ▲▲▲ END TURRET SETTINGS ▲▲▲
 
     a1:AddDropdown(
     	"carprofile",
@@ -4232,7 +4190,9 @@ local az = {
 	antiflashbang = false,
 	antiaimspin = false,
 	ESPMaster = false,
-	noturretslowdown = false,   -- ← ADDED
+	noturretslowdown = false,
+	turretsensitivity = 1,
+	spinAngle = nil,
 }
 
 local function aA(aB)
@@ -4358,6 +4318,10 @@ aJ = ak.Heartbeat:Connect(function(aL)
 	if az.silentenabled or az.turretsilentenabled or az.aimbotenabled or az.snaplines then
 		aH.combat.targetStep()
 	end
+	-- Turret fix runs every frame regardless of toggle (sensitivity slider needs it)
+	if aH.combat.turretFixStep then
+		aH.combat.turretFixStep()
+	end
 	if la_is_premium then
 		if az.antiaimspin then
 			aH.misc.movementStep(aL)
@@ -4400,4 +4364,4 @@ ak:BindToRenderStep("cwmain", Enum.RenderPriority.Last.Value + 10, function()
 end)
 
 Library:OnUnload(aK)
-Library:Notify("Cold War loaded")
+Library:Notify("Cold War loaded, made with love by vaultt. <3")
