@@ -775,98 +775,6 @@ end
 au.volleyFrom = aC
 au.fireVolleyFn = aC(aD)
 
--- ▼▼▼ TURRET AIM FIX (working) ▼▼▼
--- Finds TurretController.Attach's u5 state upvalue and sets
--- config.YawSpeed / config.PitchSpeed to huge values each frame.
-local turretCtrlModule
-local turretStateIndex
-local turretDebugOK = false
-local savedSensADS
-
-pcall(function()
-	turretCtrlModule = require(m.Shared.Vehicle.TurretController)
-end)
-
-if turretCtrlModule and type(turretCtrlModule.Attach) == "function" then
-	local ok, upvs = pcall(debug.getupvalues, turretCtrlModule.Attach)
-	if ok then
-		for idx, v in upvs do
-			if type(v) == "table" and (v.active ~= nil or v.yawMotor ~= nil) then
-				turretStateIndex = idx
-				turretDebugOK = true
-				break
-			end
-		end
-	end
-end
-
-local function turretGetState()
-	if not (turretCtrlModule and turretStateIndex) then
-		return nil
-	end
-	local ok, u5 = pcall(debug.getupvalue, turretCtrlModule.Attach, turretStateIndex)
-	if ok and type(u5) == "table" then
-		return u5
-	end
-	return nil
-end
-
-local function turretDumpDebug()
-	print("[TurretFix] === TurretController debug ===")
-	print("[TurretFix] module:", tostring(turretCtrlModule))
-	print("[TurretFix] u5 index:", tostring(turretStateIndex))
-	if turretCtrlModule and type(turretCtrlModule.Attach) == "function" then
-		for i, v in debug.getupvalues(turretCtrlModule.Attach) do
-			print(("[TurretFix]   upvalue[%d] type=%s value=%s"):format(
-				i, type(v), tostring(v)))
-		end
-	end
-	local u5 = turretGetState()
-	if u5 then
-		print("[TurretFix] active:", tostring(u5.active))
-		if u5.config then
-			for k, v in pairs(u5.config) do
-				print(("[TurretFix]   config.%s = %s"):format(tostring(k), tostring(v)))
-			end
-		end
-	end
-end
-
-local function turretApplyFix()
-	if not turretCtrlModule or not turretStateIndex then
-		return
-	end
-	local u5 = turretGetState()
-	if not (u5 and u5.active and u5.config) then
-		return
-	end
-	u5.config.YawSpeed = 1e6
-	u5.config.PitchSpeed = 1e6
-	u5.config.YawLimits = nil
-	u5.config.PitchLimits = nil
-end
-
-local function turretApplySensitivity()
-	local sensADS = l:FindFirstChild("SensitivityADS")
-	if not sensADS then
-		return
-	end
-	if not savedSensADS then
-		savedSensADS = sensADS.Value
-	end
-	local mult = e.turretsensitivity or 1
-	local target = savedSensADS * mult
-	if sensADS.Value ~= target then
-		sensADS.Value = target
-	end
-end
-
-au.turretDumpDebug          = turretDumpDebug
-au.turretApplyFix           = turretApplyFix
-au.turretApplySensitivity   = turretApplySensitivity
-au.turretDebugOK            = function() return turretDebugOK end
--- ▲▲▲ END TURRET AIM FIX ▲▲▲
-
 return au
 end)()
 
@@ -1036,23 +944,19 @@ if ad.getRecoilMult.func then
 	pcall(hookfunction, ad.getRecoilMult.func, ao)
 end
 
--- ▼▼▼ SEND-OWN-INFO HOOK (spin + pitch) ▼▼▼
 if ad.sendOwnInfo.func then
 	local ap = C(ad.sendOwnInfo.func)
 	hookfunction(ad.sendOwnInfo.func, function(...)
 		LPH_ATTRIBUTES(VM(NONE))
-		local aq = debug.getupvalue(ap, 1)
-		if aq then
-			if e.antiaimspin and e.spinAngle then
-				aq.NewCameraAngle = e.spinAngle
-			elseif e.antiaimpitch then
+		if e.antiaimpitch then
+			local aq = debug.getupvalue(ap, 1)
+			if aq then
 				aq.NewCameraAngle = math.rad(g("antiaimpitchangle", 90))
 			end
 		end
 		return ap(...)
 	end)
 end
--- ▲▲▲ END SEND-OWN-INFO HOOK ▲▲▲
 
 if ad.bodyWallPush.func then
 	local ap = C(ad.bodyWallPush.func)
@@ -1081,12 +985,11 @@ if ad.viewmodelWallPush.func then
 	end)
 end
 
--- ▼▼▼ BODY-ROTATION HOOK (spin replication) ▼▼▼
 if ad.bodyRotationUpdate.func then
 	local ap = C(ad.bodyRotationUpdate.func)
 	hookfunction(ad.bodyRotationUpdate.func, function(aq, ar)
 		LPH_ATTRIBUTES(VM(NONE))
-		if not e.antiaimpitch and not e.gunup and not e.antiaimspin then
+		if not e.antiaimpitch and not e.gunup then
 			return ap(aq, ar)
 		end
 		if aq ~= l.Character or not ar then
@@ -1109,19 +1012,9 @@ if ad.bodyRotationUpdate.func then
 		if at ~= nil and as.Parent then
 			as.Value = at
 		end
-
-		-- Force HRP yaw so other players see the spin
-		if e.antiaimspin and e.spinAngle then
-			local hrp = aq:FindFirstChild("HumanoidRootPart")
-			if hrp then
-				hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, e.spinAngle, 0)
-			end
-		end
-
 		return table.unpack(au, 1, au.n)
 	end)
 end
--- ▲▲▲ END BODY-ROTATION HOOK ▲▲▲
 
 if ad.fire.func then
 	local ap = C(ad.fire.func)
@@ -1232,7 +1125,6 @@ if ad.fireOnce.func then
 		if not (aq and aq.muzzle and aq.muzzle.Parent) then
 			return
 		end
-
 		local aw = ad.volleyFrom(au) or ad.fireVolleyFn
 
 		local ax = aq.muzzleConfig
@@ -2464,29 +2356,6 @@ if la_is_premium then
     })
 end
 
--- ▼▼▼ TURRET GROUPBOX (working) ▼▼▼
-local turretBox = o.Combat:AddRightGroupbox("Turret")
-turretBox:AddToggle("noturretslowdown", { Text = "No Turret Slowdown", Default = false })
-turretBox:AddSlider("turretsensitivity", {
-	Text = "Turret Sensitivity",
-	Default = 1,
-	Min = 0.1,
-	Max = 5,
-	Rounding = 2,
-})
-turretBox:AddButton({
-	Text = "Dump Turret Debug",
-	Func = function()
-		if ad.turretDumpDebug then
-			pcall(ad.turretDumpDebug)
-			n:Notify("Turret debug printed to F9 console.")
-		else
-			n:Notify("Turret module not found.")
-		end
-	end,
-})
--- ▲▲▲ END TURRET GROUPBOX ▲▲▲
-
 local bh = Instance.new("ScreenGui")
 bh.Name = "cwfov"
 bh.IgnoreGuiInset = true
@@ -2591,13 +2460,6 @@ end
 		carModsStep = W,
 		applyESP = bc,
 		refreshTeamFilter = bd,
-		turretFixStep = function()
-			if ad.turretApplyFix then pcall(ad.turretApplyFix) end
-			if ad.turretApplySensitivity then pcall(ad.turretApplySensitivity) end
-		end,
-		dumpTurret = function()
-			if ad.turretDumpDebug then pcall(ad.turretDumpDebug) end
-		end,
 		unload = function()
 			if bh then
 				bh:Destroy()
@@ -3497,10 +3359,6 @@ local function aR(aS)
 	if ad.antiaimspin and not aW then
 		aQ = (aQ + math.rad(af("antiaimspinspeed", 180)) * aS) % math.tau
 		aV.CFrame = CFrame.new(aV.Position) * CFrame.Angles(0, aQ, 0)
-		-- Share the spin angle so the combat module can send it to the server
-		ad.spinAngle = aQ
-	else
-		ad.spinAngle = nil
 	end
 end
 if la_is_premium then
@@ -3566,9 +3424,6 @@ if la_is_premium then
     		end
     		aO = nil
     		aP = nil
-    	end
-    	if not aU then
-    		ad.spinAngle = nil
     	end
     end)
     aT:AddSlider(
@@ -3692,7 +3547,6 @@ if la_is_premium then
     Toggles["carmods"]:OnChanged(function(a2)
     	ac.cars.apply()
     end)
-
     a1:AddDropdown(
     	"carprofile",
     	{ Text = "Car", Values = ac.cars.entries, Default = 1, Multi = false, AllowNull = true }
@@ -4190,9 +4044,6 @@ local az = {
 	antiflashbang = false,
 	antiaimspin = false,
 	ESPMaster = false,
-	noturretslowdown = false,
-	turretsensitivity = 1,
-	spinAngle = nil,
 }
 
 local function aA(aB)
@@ -4317,10 +4168,6 @@ aJ = ak.Heartbeat:Connect(function(aL)
 	LPH_ATTRIBUTES(VM(NONE))
 	if az.silentenabled or az.turretsilentenabled or az.aimbotenabled or az.snaplines then
 		aH.combat.targetStep()
-	end
-	-- Turret fix runs every frame regardless of toggle (sensitivity slider needs it)
-	if aH.combat.turretFixStep then
-		aH.combat.turretFixStep()
 	end
 	if la_is_premium then
 		if az.antiaimspin then
