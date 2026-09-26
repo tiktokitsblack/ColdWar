@@ -3126,7 +3126,9 @@ aZ:AddSlider(
 )
 aZ:AddSlider("bullettracersize", { Text = "Bullet Tracer Size", Default = 0.1, Min = 0.01, Max = 1, Rounding = 2 })
 
--- // FOV Slider (Camera)
+-- // ============================================================
+-- // Camera FOV — persistent, bypasses game resets
+-- // ============================================================
 local b0 = an.Visuals:AddLeftGroupbox("Camera")
 b0:AddSlider("fov", {
 	Text = "Field of View",
@@ -3137,26 +3139,76 @@ b0:AddSlider("fov", {
 	Suffix = "°",
 })
 
-local function b1()
-	LPH_ATTRIBUTES(VM(NONE))
-	local b2 = workspace.CurrentCamera
-	if b2 then
-		local b3 = af("fov", 70)
-		if b2.FieldOfView ~= b3 then
-			b2.FieldOfView = b3
-		end
+local b1   -- FieldOfView property-changed connection
+local b2   -- current camera reference
+local b3 = false -- recursion guard
+local b4   -- CurrentCamera swap connection
+
+local function b5() -- read desired FOV with fallback
+	return af("fov", 70)
+end
+
+local function b6() -- write FOV without retriggering
+	local b7 = workspace.CurrentCamera
+	if not b7 then return end
+	local b8 = b5()
+	if b7.FieldOfView ~= b8 and not b3 then
+		b3 = true
+		b7.FieldOfView = b8
+		b3 = false
 	end
 end
 
-Options.fov:OnChanged(b1)
-b1()
+local function b7() -- bind/re-bind to current camera
+	if b1 then
+		b1:Disconnect()
+		b1 = nil
+	end
+	local b8 = workspace.CurrentCamera
+	if not b8 then return end
+	b2 = b8
+
+	-- force initial apply
+	b3 = true
+	b8.FieldOfView = b5()
+	b3 = false
+
+	b1 = b8:GetPropertyChangedSignal("FieldOfView"):Connect(function()
+		if b3 then return end
+		local b9 = b5()
+		if b8.FieldOfView ~= b9 then
+			b3 = true
+			b8.FieldOfView = b9
+			b3 = false
+		end
+	end)
+end
+
+b7()
+
+-- Rebind when the game swaps cameras (respawn, spectate, etc.)
+b4 = workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(b7)
+
+-- Re-apply on slider change
+Options.fov:OnChanged(function()
+	b6()
+	b7()
+end)
 
 	ac.visuals = {
 		teamFilterStep = aH,
 		applyLighting = aV,
-		fovStep = b1,
+		fovStep = b6,
 		unload = function()
 			aT()
+			if b1 then
+				b1:Disconnect()
+				b1 = nil
+			end
+			if b4 then
+				b4:Disconnect()
+				b4 = nil
+			end
 		end,
 	}
 end
