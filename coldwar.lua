@@ -3126,10 +3126,35 @@ aZ:AddSlider(
 )
 aZ:AddSlider("bullettracersize", { Text = "Bullet Tracer Size", Default = 0.1, Min = 0.01, Max = 1, Rounding = 2 })
 
+-- // FOV Slider (Camera)
+local b0 = an.Visuals:AddLeftGroupbox("Camera")
+b0:AddSlider("fov", {
+	Text = "Field of View",
+	Default = 70,
+	Min = 70,
+	Max = 120,
+	Rounding = 0,
+	Suffix = "°",
+})
+
+local function b1()
+	LPH_ATTRIBUTES(VM(NONE))
+	local b2 = workspace.CurrentCamera
+	if b2 then
+		local b3 = af("fov", 70)
+		if b2.FieldOfView ~= b3 then
+			b2.FieldOfView = b3
+		end
+	end
+end
+
+Options.fov:OnChanged(b1)
+b1()
 
 	ac.visuals = {
 		teamFilterStep = aH,
 		applyLighting = aV,
+		fovStep = b1,
 		unload = function()
 			aT()
 		end,
@@ -4044,6 +4069,7 @@ local az = {
 	antiflashbang = false,
 	antiaimspin = false,
 	ESPMaster = false,
+	fov = 70,
 }
 
 local function aA(aB)
@@ -4195,6 +4221,9 @@ aJ = ak.Heartbeat:Connect(function(aL)
 	if az.lightingoverride then
 		aH.visuals.applyLighting()
 	end
+	if aH.visuals.fovStep then
+		aH.visuals.fovStep()
+	end
 end)
 
 ak:BindToRenderStep("cwmain", Enum.RenderPriority.Last.Value + 10, function()
@@ -4211,4 +4240,4 @@ ak:BindToRenderStep("cwmain", Enum.RenderPriority.Last.Value + 10, function()
 end)
 
 Library:OnUnload(aK)
-Library:Notify("Cold War loaded, made with love by vaultt. <3")
+Library:Notify("Cold War loaded")
